@@ -109,6 +109,12 @@ jobs:
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/saturn-release.p12
 
+      - name: Debug keystore file
+        run: |
+          ls -l android/app/saturn-release.p12
+          sha256sum android/app/saturn-release.p12
+          file android/app/saturn-release.p12
+
       - name: Write key.properties
         run: |
           cat > android/key.properties << EOF
