@@ -129,12 +129,12 @@ jobs:
 
       - name: Write key.properties
         run: |
-          cat > android/key.properties << EOF
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=saturn-release.p12
-          EOF
+          cat > android/key.properties <<EOF
+storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+keyPassword=${{ secrets.KEY_PASSWORD }}
+keyAlias=${{ secrets.KEY_ALIAS }}
+storeFile=saturn-release.p12
+EOF
 
       - name: Build release AAB
         run: flutter build appbundle --release
