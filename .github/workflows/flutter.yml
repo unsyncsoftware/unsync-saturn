@@ -128,11 +128,17 @@ jobs:
           sha256sum android/app/saturn-release.p12
 
       - name: Write key.properties
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
-          echo "storeFile=saturn-release.p12" >> android/key.properties
+          printf '%s\n' \
+            "storePassword=${KEYSTORE_PASSWORD}" \
+            "keyPassword=${KEY_PASSWORD}" \
+            "keyAlias=${KEY_ALIAS}" \
+            "storeFile=saturn-release.p12" \
+            > android/key.properties
 
       - name: Build release AAB
         run: flutter build appbundle --release
