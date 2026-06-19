@@ -45,5 +45,6 @@ app.*.map.json
 /android/app/release
 
 # Android release signing
-/android/key.properties
-/android/app/*.jks
+android/key.properties
+android/app/saturn-release.jks
+android/app/saturn-release.p12
