@@ -28,6 +28,10 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install Android CMake
+        run: |
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.22.1"
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -58,6 +62,10 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Install Android CMake
+        run: |
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.22.1"
 
       - name: Install dependencies
         run: flutter pub get
