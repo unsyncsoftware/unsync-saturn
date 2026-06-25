@@ -90,6 +90,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                         javaScriptEnabled: true,
                         domStorageEnabled: true,
                         useShouldOverrideUrlLoading: true,
+                        resourceCustomSchemes: [AppConstants.meshScheme],
                         mixedContentMode:
                             MixedContentMode.MIXED_CONTENT_NEVER_ALLOW,
                         hardwareAcceleration: true,
@@ -97,6 +98,33 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                       onWebViewCreated: (controller) {
                         _webViewController = controller;
                       },
+                      onLoadResourceWithCustomScheme:
+                          (controller, request) async {
+                            final url = request.url.toString();
+                            final hostPeerId = _currentHostPeerId;
+                            if (hostPeerId == null) {
+                              return null;
+                            }
+
+                            final uri = Uri.parse(url);
+                            final path = uri.path.isEmpty ? '/' : uri.path;
+                            final query = uri.hasQuery ? '?${uri.query}' : '';
+                            final fullPath = '$path$query';
+
+                            final result = await ref
+                                .read(meshClientProvider)
+                                .fetch(hostPeerId, fullPath);
+
+                            if (!result.success || result.bytes == null) {
+                              return null;
+                            }
+
+                            return CustomSchemeResponse(
+                              data: result.bytes!,
+                              contentType: result.mime,
+                              contentEncoding: 'UTF-8',
+                            );
+                          },
                       shouldOverrideUrlLoading: (controller, action) async {
                         final url = action.request.url?.toString();
                         if (url == null) {
@@ -243,7 +271,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
           data: utf8.decode(result.bytes!),
           mimeType: result.mime,
           encoding: 'UTF-8',
-          baseUrl: WebUri(displayUrl),
+          baseUrl: WebUri('mesh://$_currentMeshHandle/'),
           historyUrl: WebUri(displayUrl),
         );
         notifier.setAddressBar(displayUrl);
