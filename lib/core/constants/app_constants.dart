@@ -4,7 +4,7 @@ class AppConstants {
   static const meshScheme = 'mesh';
   static const meshSchemePrefix = 'mesh://';
   static const registryBase = 'https://mesh.unsync.uk';
-  static const resolveEndpoint = 'https://mesh.unsync.uk/resolve';
+  static const resolveEndpoint = 'https://mesh.unsync.uk/mesh/resolve';
   static const signalBase = 'wss://signal.unsync.uk';
   static const relayBase = 'wss://relay.unsync.uk';
   static const appName = 'Saturn';

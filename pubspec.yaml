@@ -12,6 +12,7 @@ dependencies:
   flutter_inappwebview: ^6.1.5
   flutter_riverpod: ^2.6.1
   dio: ^5.7.0
+  web_socket_channel: ^3.0.1
   google_fonts: ^6.2.1
   url_launcher: ^6.3.1
   shared_preferences: ^2.3.3

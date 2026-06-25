@@ -7,14 +7,14 @@ enum MeshResolveStatus { success, notFound, timeout, error }
 class MeshResolveResult {
   const MeshResolveResult({
     required this.status,
-    this.targetUrl,
+    this.peerId,
     this.handle,
     this.errorMessage,
     this.raw,
   });
 
   final MeshResolveStatus status;
-  final String? targetUrl;
+  final String? peerId;
   final String? handle;
   final String? errorMessage;
   final Map<String, dynamic>? raw;
@@ -51,9 +51,9 @@ class MeshResolver {
       );
 
       final raw = response.data ?? const <String, dynamic>{};
-      final target = raw['target'];
-      if (response.statusCode == 200 && target is String && target.isNotEmpty) {
-        // TODO: Verify registry signatures before trusting target records.
+      final peerId = raw['peer_id'];
+      if (response.statusCode == 200 && peerId is String && peerId.isNotEmpty) {
+        // TODO: Verify registry signatures before trusting peer records.
         final isValid = _isSignatureValid(raw);
         if (!isValid) {
           return MeshResolveResult(
@@ -66,7 +66,7 @@ class MeshResolver {
 
         return MeshResolveResult(
           status: MeshResolveStatus.success,
-          targetUrl: _appendSuffix(target, parsed.suffix),
+          peerId: peerId,
           handle: handle,
           raw: raw,
         );
@@ -76,7 +76,7 @@ class MeshResolver {
         status: MeshResolveStatus.error,
         handle: handle,
         raw: raw,
-        errorMessage: 'Resolver returned no target',
+        errorMessage: 'Resolver returned no peer_id',
       );
     } on DioException catch (error) {
       if (error.response?.statusCode == 404) {
@@ -132,41 +132,6 @@ class MeshResolver {
       handle: withoutScheme.substring(0, suffixStart),
       suffix: withoutScheme.substring(suffixStart),
     );
-  }
-
-  String _appendSuffix(String target, String suffix) {
-    if (suffix.isEmpty) {
-      return target;
-    }
-
-    final targetUri = Uri.parse(target);
-    final suffixUri = Uri.parse('mesh://placeholder$suffix');
-    final path = _joinPaths(targetUri.path, suffixUri.path);
-
-    return targetUri
-        .replace(
-          path: path,
-          query: suffixUri.hasQuery ? suffixUri.query : targetUri.query,
-          fragment: suffixUri.hasFragment
-              ? suffixUri.fragment
-              : targetUri.fragment,
-        )
-        .toString();
-  }
-
-  String _joinPaths(String basePath, String suffixPath) {
-    if (suffixPath.isEmpty) {
-      return basePath;
-    }
-
-    if (basePath.isEmpty || basePath == '/') {
-      return suffixPath;
-    }
-
-    final cleanBase = basePath.endsWith('/')
-        ? basePath.substring(0, basePath.length - 1)
-        : basePath;
-    return '$cleanBase$suffixPath';
   }
 
   Map<String, dynamic>? _mapResponse(Object? data) {

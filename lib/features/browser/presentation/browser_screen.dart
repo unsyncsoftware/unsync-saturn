@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/saturn_theme.dart';
 import '../../mesh/resolver/mesh_resolver.dart';
 import '../../mesh/providers/mesh_providers.dart';
+import '../../mesh/services/mesh_client.dart';
 import '../providers/browser_provider.dart';
 import 'address_bar.dart';
 import 'browser_controls.dart';
@@ -21,6 +24,8 @@ class BrowserScreen extends ConsumerStatefulWidget {
 class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   InAppWebViewController? _webViewController;
   bool _showHome = true;
+  String? _currentHostPeerId;
+  String? _currentMeshHandle;
 
   @override
   Widget build(BuildContext context) {
@@ -94,9 +99,31 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                       },
                       shouldOverrideUrlLoading: (controller, action) async {
                         final url = action.request.url?.toString();
-                        if (url != null &&
-                            url.startsWith(AppConstants.meshSchemePrefix)) {
-                          await _resolveMesh(url);
+                        if (url == null) {
+                          return NavigationActionPolicy.ALLOW;
+                        }
+
+                        if (url.startsWith(AppConstants.meshSchemePrefix)) {
+                          final hostPeerId = _currentHostPeerId;
+                          if (hostPeerId != null && _isCurrentMeshHandle(url)) {
+                            await _fetchMeshContent(
+                              hostPeerId,
+                              _pathFromMeshUrl(url),
+                              url,
+                            );
+                          } else {
+                            await _resolveMesh(url);
+                          }
+                          return NavigationActionPolicy.CANCEL;
+                        }
+
+                        final meshUrl = _meshUrlForRelativeNavigation(url);
+                        if (meshUrl != null && _currentHostPeerId != null) {
+                          await _fetchMeshContent(
+                            _currentHostPeerId!,
+                            _pathFromMeshUrl(meshUrl),
+                            meshUrl,
+                          );
                           return NavigationActionPolicy.CANCEL;
                         }
 
@@ -151,6 +178,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     notifier.setUrl(url);
 
     if (url == AppConstants.homeUrl) {
+      _clearCurrentMeshHost();
       setState(() => _showHome = true);
       notifier.setLoading(false);
       notifier.setNavState(canGoBack: false, canGoForward: false);
@@ -162,6 +190,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
       return;
     }
 
+    _clearCurrentMeshHost();
     setState(() => _showHome = false);
     await _webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
   }
@@ -177,17 +206,63 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
       return;
     }
 
-    if (result.status == MeshResolveStatus.success &&
-        result.targetUrl != null) {
-      await _webViewController?.loadUrl(
-        urlRequest: URLRequest(url: WebUri(result.targetUrl!)),
+    if (result.status == MeshResolveStatus.success && result.peerId != null) {
+      _currentHostPeerId = result.peerId;
+      _currentMeshHandle = result.handle;
+      await _fetchMeshContent(
+        result.peerId!,
+        _pathFromMeshUrl(meshUrl),
+        meshUrl,
       );
-      notifier.setAddressBar(meshUrl);
+      return;
+    }
+
+    _clearCurrentMeshHost();
+    notifier.setLoading(false);
+    _showMeshError(result);
+  }
+
+  Future<void> _fetchMeshContent(
+    String hostPeerId,
+    String path,
+    String displayUrl,
+  ) async {
+    final notifier = ref.read(browserProvider.notifier);
+    notifier.setAddressBar(displayUrl);
+    notifier.setLoading(true);
+    setState(() => _showHome = false);
+
+    final result = await ref.read(meshClientProvider).fetch(hostPeerId, path);
+    if (!mounted) {
+      return;
+    }
+
+    if (result.success && result.bytes != null) {
+      try {
+        await _webViewController?.loadData(
+          data: utf8.decode(result.bytes!),
+          mimeType: result.mime,
+          encoding: 'UTF-8',
+          baseUrl: WebUri(displayUrl),
+          historyUrl: WebUri(displayUrl),
+        );
+        notifier.setAddressBar(displayUrl);
+      } on FormatException catch (error) {
+        notifier.setLoading(false);
+        _showMeshFetchError(
+          MeshFetchResult(
+            success: false,
+            status: result.status,
+            mime: result.mime,
+            error: error.message,
+          ),
+        );
+      }
       return;
     }
 
     notifier.setLoading(false);
-    _showMeshError(result);
+    _showMeshFetchError(result);
   }
 
   Future<void> _goBack() async {
@@ -264,5 +339,132 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
         );
       },
     );
+  }
+
+  void _showMeshFetchError(MeshFetchResult result) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Mesh fetch failed',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: SaturnTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Status: ${result.status}',
+                style: SaturnTheme.mono.copyWith(
+                  color: SaturnTheme.meshAccent,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'MIME: ${result.mime}',
+                style: SaturnTheme.mono.copyWith(
+                  color: SaturnTheme.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+              if (result.error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  result.error!,
+                  style: const TextStyle(color: SaturnTheme.textSecondary),
+                ),
+              ],
+              const SizedBox(height: 18),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  bool _isCurrentMeshHandle(String meshUrl) {
+    final handle = _handleFromMeshUrl(meshUrl);
+    return handle != null && handle == _currentMeshHandle;
+  }
+
+  String? _meshUrlForRelativeNavigation(String url) {
+    final handle = _currentMeshHandle;
+    if (handle == null) {
+      return null;
+    }
+
+    if (url.startsWith('about:blank')) {
+      final suffix = url.substring('about:blank'.length);
+      if (suffix.startsWith('/')) {
+        return '${AppConstants.meshSchemePrefix}$handle$suffix';
+      }
+      if (suffix.startsWith('?')) {
+        return '${AppConstants.meshSchemePrefix}$handle/$suffix';
+      }
+    }
+
+    if (url.startsWith('/')) {
+      return '${AppConstants.meshSchemePrefix}$handle$url';
+    }
+
+    return null;
+  }
+
+  String _pathFromMeshUrl(String meshUrl) {
+    final withoutScheme = meshUrl.startsWith(AppConstants.meshSchemePrefix)
+        ? meshUrl.substring(AppConstants.meshSchemePrefix.length)
+        : meshUrl;
+    final suffixStart = withoutScheme.indexOf(RegExp(r'[/#?]'));
+    if (suffixStart == -1) {
+      return '/';
+    }
+
+    final suffix = withoutScheme.substring(suffixStart);
+    if (suffix.startsWith('/')) {
+      final fragmentStart = suffix.indexOf('#');
+      final path = fragmentStart == -1
+          ? suffix
+          : suffix.substring(0, fragmentStart);
+      return path.isEmpty ? '/' : path;
+    }
+
+    if (suffix.startsWith('?')) {
+      final fragmentStart = suffix.indexOf('#');
+      final query = fragmentStart == -1
+          ? suffix
+          : suffix.substring(0, fragmentStart);
+      return '/$query';
+    }
+
+    return '/';
+  }
+
+  String? _handleFromMeshUrl(String meshUrl) {
+    if (!meshUrl.startsWith(AppConstants.meshSchemePrefix)) {
+      return null;
+    }
+
+    final withoutScheme = meshUrl.substring(
+      AppConstants.meshSchemePrefix.length,
+    );
+    final suffixStart = withoutScheme.indexOf(RegExp(r'[/#?]'));
+    final handle = suffixStart == -1
+        ? withoutScheme
+        : withoutScheme.substring(0, suffixStart);
+    return handle.isEmpty ? null : handle;
+  }
+
+  void _clearCurrentMeshHost() {
+    _currentHostPeerId = null;
+    _currentMeshHandle = null;
   }
 }
