@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -9,6 +11,7 @@ import '../../../core/theme/saturn_theme.dart';
 import '../../mesh/resolver/mesh_resolver.dart';
 import '../../mesh/providers/mesh_providers.dart';
 import '../../mesh/services/mesh_client.dart';
+import '../../mesh/services/mesh_media_bridge.dart';
 import '../providers/browser_provider.dart';
 import 'address_bar.dart';
 import 'browser_controls.dart';
@@ -26,6 +29,16 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   bool _showHome = true;
   String? _currentHostPeerId;
   String? _currentMeshHandle;
+  MeshMediaBridge? _mediaBridge;
+
+  @override
+  void dispose() {
+    final bridge = _mediaBridge;
+    if (bridge != null) {
+      unawaited(bridge.dispose());
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -98,33 +111,75 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                       onWebViewCreated: (controller) {
                         _webViewController = controller;
                       },
-                      onLoadResourceWithCustomScheme:
-                          (controller, request) async {
-                            final url = request.url.toString();
-                            final hostPeerId = _currentHostPeerId;
-                            if (hostPeerId == null) {
-                              return null;
-                            }
+                      onLoadResourceWithCustomScheme: (controller, request) async {
+                        final url = request.url.toString();
+                        final requestHeaders = request.headers ?? {};
+                        final rangeHeader = _headerValue(
+                          requestHeaders,
+                          'range',
+                        );
 
-                            final uri = Uri.parse(url);
-                            final path = uri.path.isEmpty ? '/' : uri.path;
-                            final query = uri.hasQuery ? '?${uri.query}' : '';
-                            final fullPath = '$path$query';
+                        final hostPeerId = _currentHostPeerId;
+                        if (hostPeerId == null) {
+                          return null;
+                        }
 
-                            final result = await ref
-                                .read(meshClientProvider)
-                                .fetch(hostPeerId, fullPath);
+                        final uri = Uri.parse(url);
+                        final path = uri.path.isEmpty ? '/' : uri.path;
+                        final query = uri.hasQuery ? '?${uri.query}' : '';
+                        final fullPath = '$path$query';
+                        final shouldLogResource =
+                            _isMediaOrPlaylistPath(fullPath) ||
+                            rangeHeader != null;
+                        if (shouldLogResource) {
+                          _logMeshResource('custom request URL: $url');
+                          _logMeshResource(
+                            'custom request Range: ${rangeHeader ?? '(none)'}',
+                          );
+                        }
 
-                            if (!result.success || result.bytes == null) {
-                              return null;
-                            }
-
-                            return CustomSchemeResponse(
-                              data: result.bytes!,
-                              contentType: result.mime,
-                              contentEncoding: 'UTF-8',
+                        final result = await ref
+                            .read(meshClientProvider)
+                            .fetch(
+                              hostPeerId,
+                              fullPath,
+                              headers: requestHeaders,
+                              range: rangeHeader,
                             );
-                          },
+
+                        if (shouldLogResource) {
+                          _logMeshResource(
+                            'custom response status: ${result.status}',
+                          );
+                          _logMeshResource(
+                            'custom response Content-Type: ${result.mime}',
+                          );
+                          _logMeshResource(
+                            'custom response Content-Length: '
+                            '${_headerValue(result.headers, 'content-length') ?? result.bytes?.length ?? '(none)'}',
+                          );
+                          _logMeshResource(
+                            'custom response Content-Range: '
+                            '${_headerValue(result.headers, 'content-range') ?? '(none)'}',
+                          );
+                        }
+
+                        if (!result.success || result.bytes == null) {
+                          return null;
+                        }
+
+                        final bytes = await _rewritePlaylistMediaUrlsIfNeeded(
+                          uri,
+                          result,
+                          hostPeerId,
+                        );
+
+                        return CustomSchemeResponse(
+                          data: bytes,
+                          contentType: result.mime,
+                          contentEncoding: 'UTF-8',
+                        );
+                      },
                       shouldOverrideUrlLoading: (controller, action) async {
                         final url = action.request.url?.toString();
                         if (url == null) {
@@ -235,8 +290,10 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     }
 
     if (result.status == MeshResolveStatus.success && result.peerId != null) {
+      final handle = result.handle ?? _handleFromMeshUrl(meshUrl);
       _currentHostPeerId = result.peerId;
-      _currentMeshHandle = result.handle;
+      _currentMeshHandle = handle;
+      _registerMeshMediaHost(handle, result.peerId!);
       await _fetchMeshContent(
         result.peerId!,
         _pathFromMeshUrl(meshUrl),
@@ -267,8 +324,13 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
 
     if (result.success && result.bytes != null) {
       try {
+        final html = await _prepareMeshHtml(
+          utf8.decode(result.bytes!),
+          result.mime,
+          hostPeerId,
+        );
         await _webViewController?.loadData(
-          data: utf8.decode(result.bytes!),
+          data: html,
           mimeType: result.mime,
           encoding: 'UTF-8',
           baseUrl: WebUri('mesh://$_currentMeshHandle/'),
@@ -491,8 +553,215 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     return handle.isEmpty ? null : handle;
   }
 
+  void _registerMeshMediaHost(String? handle, String peerId) {
+    if (handle == null || handle.isEmpty) {
+      return;
+    }
+
+    final bridge = _mediaBridge ??= MeshMediaBridge(
+      ref.read(meshClientProvider),
+      log: _logMeshResource,
+    );
+    bridge.registerHost(handle, peerId);
+  }
+
+  Future<Uint8List> _rewritePlaylistMediaUrlsIfNeeded(
+    Uri uri,
+    MeshFetchResult result,
+    String hostPeerId,
+  ) async {
+    final bytes = result.bytes!;
+    final handle = _currentMeshHandle;
+    if (handle == null || !_isPlaylistRequest(uri)) {
+      return bytes;
+    }
+
+    try {
+      _registerMeshMediaHost(handle, hostPeerId);
+      final decoded = jsonDecode(utf8.decode(bytes));
+      final rewritten = await _rewritePlaylistValue(decoded, handle);
+      if (!rewritten.changed) {
+        return bytes;
+      }
+
+      _logMeshResource(
+        'playlist media URLs rewritten through localhost bridge',
+      );
+      return Uint8List.fromList(utf8.encode(jsonEncode(rewritten.value)));
+    } on Object catch (error) {
+      _logMeshResource('playlist rewrite skipped: $error');
+      return bytes;
+    }
+  }
+
+  Future<String> _prepareMeshHtml(
+    String html,
+    String mime,
+    String hostPeerId,
+  ) async {
+    final handle = _currentMeshHandle;
+    if (handle == null || !_isHtmlMime(mime)) {
+      return html;
+    }
+
+    _registerMeshMediaHost(handle, hostPeerId);
+    final bridge = _mediaBridge ??= MeshMediaBridge(
+      ref.read(meshClientProvider),
+      log: _logMeshResource,
+    );
+    final bridgeBase = (await bridge.baseUrl(handle)).toString();
+    final script = _meshBridgeFetchScript(handle, bridgeBase);
+    _logMeshResource('mesh HTML fetch shim installed for $handle');
+
+    final head = RegExp(
+      r'<head(\s[^>]*)?>',
+      caseSensitive: false,
+    ).firstMatch(html);
+    if (head == null) {
+      return '$script$html';
+    }
+
+    return html.replaceRange(head.end, head.end, script);
+  }
+
+  bool _isHtmlMime(String mime) {
+    return mime.toLowerCase().contains('html');
+  }
+
+  String _meshBridgeFetchScript(String handle, String bridgeBase) {
+    final meshBase = '${AppConstants.meshSchemePrefix}$handle/';
+    return '''
+<script>
+(() => {
+  const meshBase = ${jsonEncode(meshBase)};
+  const meshHost = ${jsonEncode(handle)};
+  const bridgeBase = ${jsonEncode(bridgeBase)};
+  const nativeFetch = window.fetch.bind(window);
+
+  window.fetch = function(input, init) {
+    const raw = typeof input === 'string' ? input : input && input.url;
+    if (raw) {
+      try {
+        const resolved = new URL(raw, meshBase);
+        if (
+          resolved.protocol === 'mesh:' &&
+          resolved.host === meshHost &&
+          (resolved.pathname === '/playlist.json' ||
+            resolved.pathname.startsWith('/media/'))
+        ) {
+          const target = bridgeBase + resolved.pathname + resolved.search;
+          console.log('[saturn mesh bridge] fetch ' + target);
+          return nativeFetch(target, init);
+        }
+      } catch (_) {}
+    }
+
+    return nativeFetch(input, init);
+  };
+})();
+</script>
+''';
+  }
+
+  Future<_PlaylistRewriteResult> _rewritePlaylistValue(
+    Object? value,
+    String handle,
+  ) async {
+    if (value is String) {
+      final mediaPath = _relativeMeshMediaPath(value);
+      if (mediaPath == null) {
+        return _PlaylistRewriteResult(value, changed: false);
+      }
+
+      final bridge = _mediaBridge ??= MeshMediaBridge(
+        ref.read(meshClientProvider),
+        log: _logMeshResource,
+      );
+      final mediaUrl = await bridge.mediaUrl(handle, mediaPath);
+      return _PlaylistRewriteResult(mediaUrl.toString(), changed: true);
+    }
+
+    if (value is List) {
+      var changed = false;
+      final items = <Object?>[];
+      for (final item in value) {
+        final rewritten = await _rewritePlaylistValue(item, handle);
+        changed = changed || rewritten.changed;
+        items.add(rewritten.value);
+      }
+      return _PlaylistRewriteResult(items, changed: changed);
+    }
+
+    if (value is Map) {
+      var changed = false;
+      final map = <Object?, Object?>{};
+      for (final entry in value.entries) {
+        final rewritten = await _rewritePlaylistValue(entry.value, handle);
+        changed = changed || rewritten.changed;
+        map[entry.key] = rewritten.value;
+      }
+      return _PlaylistRewriteResult(map, changed: changed);
+    }
+
+    return _PlaylistRewriteResult(value, changed: false);
+  }
+
+  bool _isPlaylistRequest(Uri uri) {
+    return uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.last == 'playlist.json';
+  }
+
+  bool _isMediaOrPlaylistPath(String path) {
+    final uri = Uri.tryParse(path);
+    if (uri == null) {
+      return false;
+    }
+
+    return uri.path == '/playlist.json' || uri.path.startsWith('/media/');
+  }
+
+  String? _relativeMeshMediaPath(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null || uri.hasScheme) {
+      return null;
+    }
+
+    final path = uri.path.startsWith('/') ? uri.path : '/${uri.path}';
+    if (!path.toLowerCase().startsWith('/media/')) {
+      return null;
+    }
+
+    return '$path${uri.hasQuery ? '?${uri.query}' : ''}';
+  }
+
+  String? _headerValue(Map<String, String> headers, String name) {
+    final exact = headers[name];
+    if (exact != null) {
+      return exact;
+    }
+
+    final lower = name.toLowerCase();
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == lower) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  void _logMeshResource(String message) {
+    debugPrint('[mesh-media] $message');
+  }
+
   void _clearCurrentMeshHost() {
     _currentHostPeerId = null;
     _currentMeshHandle = null;
   }
+}
+
+class _PlaylistRewriteResult {
+  const _PlaylistRewriteResult(this.value, {required this.changed});
+
+  final Object? value;
+  final bool changed;
 }

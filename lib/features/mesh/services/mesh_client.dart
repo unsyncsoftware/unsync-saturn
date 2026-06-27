@@ -12,6 +12,7 @@ class MeshFetchResult {
     required this.success,
     required this.status,
     required this.mime,
+    this.headers = const {},
     this.bytes,
     this.error,
   });
@@ -19,6 +20,7 @@ class MeshFetchResult {
   final bool success;
   final int status;
   final String mime;
+  final Map<String, String> headers;
   final Uint8List? bytes;
   final String? error;
 }
@@ -43,7 +45,12 @@ class MeshClient {
   final Map<String, Completer<MeshFetchResult>> _pending = {};
   final Map<String, _ChunkedResponse> _chunked = {};
 
-  Future<MeshFetchResult> fetch(String hostPeerId, String path) async {
+  Future<MeshFetchResult> fetch(
+    String hostPeerId,
+    String path, {
+    Map<String, String>? headers,
+    String? range,
+  }) async {
     final requestPath = path.isEmpty ? '/' : path;
     try {
       await _ensureConnected();
@@ -60,13 +67,26 @@ class MeshClient {
     final completer = Completer<MeshFetchResult>();
     _pending[requestId] = completer;
 
-    _send({
+    final requestHeaders = <String, String>{...?headers};
+    if (range != null && range.isNotEmpty) {
+      requestHeaders['Range'] = range;
+    }
+
+    final message = <String, Object?>{
       'type': 'mesh-request',
       'to': hostPeerId,
       'from': saturnPeerId,
       'requestId': requestId,
       'path': requestPath.startsWith('/') ? requestPath : '/$requestPath',
-    });
+    };
+    if (requestHeaders.isNotEmpty) {
+      message['headers'] = requestHeaders;
+    }
+    if (range != null && range.isNotEmpty) {
+      message['range'] = range;
+    }
+
+    _send(message);
 
     try {
       return await completer.future.timeout(
@@ -208,6 +228,7 @@ class MeshClient {
           success: _statusCode(raw) < 400,
           status: _statusCode(raw),
           mime: _mime(raw),
+          headers: _headers(raw),
           bytes: base64Decode(body),
         ),
       );
@@ -227,6 +248,7 @@ class MeshClient {
       total: total.toInt(),
       status: _statusCode(raw),
       mime: _mime(raw),
+      headers: _headers(raw),
     );
   }
 
@@ -269,6 +291,7 @@ class MeshClient {
           success: false,
           status: response.status,
           mime: response.mime,
+          headers: response.headers,
           error: 'Mesh response ended before all chunks arrived',
         ),
       );
@@ -285,6 +308,7 @@ class MeshClient {
             success: false,
             status: response.status,
             mime: response.mime,
+            headers: response.headers,
             error: 'Mesh response is missing chunk $index',
           ),
         );
@@ -299,6 +323,7 @@ class MeshClient {
         success: response.status < 400,
         status: response.status,
         mime: response.mime,
+        headers: response.headers,
         bytes: builder.takeBytes(),
       ),
     );
@@ -345,11 +370,23 @@ class MeshClient {
         : 'application/octet-stream';
   }
 
+  Map<String, String> _headers(Map<String, dynamic> raw) {
+    final headers = raw['headers'];
+    if (headers is! Map) {
+      return const {};
+    }
+
+    return headers.map((key, value) {
+      return MapEntry(key.toString(), value.toString());
+    });
+  }
+
   MeshFetchResult _errorResult(Map<String, dynamic> raw, String error) {
     return MeshFetchResult(
       success: false,
       status: _statusCode(raw),
       mime: _mime(raw),
+      headers: _headers(raw),
       error: error,
     );
   }
@@ -424,10 +461,12 @@ class _ChunkedResponse {
     required this.total,
     required this.status,
     required this.mime,
+    required this.headers,
   });
 
   final int total;
   final int status;
   final String mime;
+  final Map<String, String> headers;
   final Map<int, Uint8List> chunks = {};
 }
