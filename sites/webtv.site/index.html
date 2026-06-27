@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROUGE WEBTV</title>
+<style>
+:root{--brand:#ff2d55;--brand-glow:rgba(255,45,85,.25);--bg:#0a0a0c;--card:#111114;--border:#222227;--muted:#71717a;--text:#f4f4f5}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+body::before{content:'';position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;height:300px;background:radial-gradient(circle,rgba(255,45,85,.08) 0%,transparent 70%);z-index:-1;pointer-events:none}
+.header{text-align:center;margin-bottom:24px}
+h1{font-size:2.2rem;font-weight:800;letter-spacing:6px;text-transform:uppercase;background:linear-gradient(to right,#fff,#f4f4f5,var(--brand));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.subtitle{font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:2px;display:flex;align-items:center;justify-content:center;gap:8px}
+.subtitle::before{content:'';display:inline-block;width:6px;height:6px;background:var(--brand);border-radius:50%;box-shadow:0 0 8px var(--brand)}
+.video-container{width:100%;max-width:960px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;box-shadow:0 20px 40px rgba(0,0,0,.5),0 0 0 1px rgba(255,45,85,.05);transition:border-color .3s,box-shadow .3s}
+.video-container:hover{border-color:rgba(255,45,85,.3);box-shadow:0 20px 40px rgba(0,0,0,.6),0 0 20px var(--brand-glow)}
+.video-wrapper{position:relative;width:100%;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:16/9}
+video{width:100%;height:100%;display:block;outline:none;object-fit:contain}
+.status-bar{width:100%;max-width:960px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:.75rem;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;padding:0 8px}
+.status-tag{display:flex;align-items:center;gap:6px;background:rgba(0,255,102,.06);border:1px solid rgba(0,255,102,.15);padding:4px 10px;border-radius:4px;color:#00ff66}
+.status-tag span{width:6px;height:6px;background:#00ff66;border-radius:50%;display:inline-block;animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.server-tag{background:rgba(255,255,255,.03);border:1px solid var(--border);padding:4px 10px;border-radius:4px}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.9)}}
+.no-signal{text-align:center;padding:80px 20px;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px;font-size:.8rem}
+</style>
+</head>
+
+<body>
+<div class="header">
+  <h1>Rouge WebTV</h1>
+  <p class="subtitle">Live Stream</p>
+</div>
+
+<div class="video-container">
+  <div class="video-wrapper">
+    <video id="v" controls autoplay muted preload="metadata" playsinline></video>
+    <div id="nosig" class="no-signal" style="display:none">
+      [-] NO BROADCAST SIGNAL DETECTED IN /MEDIA/
+    </div>
+  </div>
+</div>
+
+<div class="status-bar" id="statusBar" style="display:none">
+  <div class="status-tag"><span></span>Uplink Stable</div>
+  <div class="server-tag">Host: Wyse-5070</div>
+</div>
+
+<script>
+const v = document.getElementById("v");
+const nosig = document.getElementById("nosig");
+const statusBar = document.getElementById("statusBar");
+const expectedVideoMime = "video/mp4";
+const expectedVideoCodec = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+
+let playlist = [];
+let idx = 0;
+
+function showNoSignal() {
+  v.style.display = "none";
+  nosig.style.display = "flex";
+  statusBar.style.display = "none";
+}
+
+function showPlayer() {
+  v.style.display = "block";
+  nosig.style.display = "none";
+  statusBar.style.display = "flex";
+}
+
+function loadVideo(i, autoplay = true) {
+  if (!playlist.length) {
+    showNoSignal();
+    return;
+  }
+
+  idx = i;
+
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+
+  v.preload = "metadata";
+  v.src = playlist[idx];
+  console.info("[webtv] loading video", {
+    index: idx,
+    src: v.src,
+    expectedMime: expectedVideoMime,
+    mp4Support: v.canPlayType(expectedVideoMime),
+    h264AacSupport: v.canPlayType(expectedVideoCodec),
+  });
+
+  showPlayer();
+
+  if (autoplay) {
+    v.play().catch(error => {
+      console.warn("[webtv] autoplay/playback blocked or failed", error);
+    });
+  }
+}
+
+console.info("[webtv] loading playlist", "playlist.json");
+
+fetch("playlist.json")
+  .then(r => {
+    console.info("[webtv] playlist response", r.status, r.statusText);
+    if (!r.ok) throw new Error("playlist request failed: " + r.status);
+    return r.json();
+  })
+  .then(files => {
+    playlist = Array.isArray(files) ? files : [];
+    console.info("[webtv] playlist parsed", playlist);
+
+    if (!playlist.length) {
+      showNoSignal();
+      return;
+    }
+
+    loadVideo(0, true);
+  })
+  .catch(error => {
+    console.error("[webtv] playlist load failed", error);
+    showNoSignal();
+  });
+
+v.onended = () => {
+  setTimeout(() => {
+    loadVideo((idx + 1) % playlist.length, true);
+  }, 500);
+};
+
+v.onerror = () => {
+  console.error("[webtv] video playback error", {
+    src: v.currentSrc || v.src,
+    error: v.error,
+    networkState: v.networkState,
+    readyState: v.readyState,
+  });
+  statusBar.style.display = "none";
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROUGE RADIO</title>
+<style>
+:root{--brand:#ff2d55;--bg:#0a0a0c;--card:#111114;--border:#222227;--muted:#71717a;--text:#f4f4f5}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+body::before{content:'';position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;height:300px;background:radial-gradient(circle,rgba(255,45,85,.07) 0%,transparent 70%);z-index:-1;pointer-events:none}
+.header{text-align:center;margin-bottom:32px}
+h1{font-size:2.2rem;font-weight:800;letter-spacing:6px;text-transform:uppercase;background:linear-gradient(to right,#fff,#f4f4f5,var(--brand));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.subtitle{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:2px;display:flex;align-items:center;justify-content:center;gap:8px}
+.subtitle::before{content:'';width:6px;height:6px;background:var(--brand);border-radius:50%;box-shadow:0 0 8px var(--brand);display:block}
+.card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:44px 36px;text-align:center;box-shadow:0 20px 40px rgba(0,0,0,.5);transition:border-color .3s,box-shadow .3s}
+.card:hover{border-color:rgba(255,45,85,.25);box-shadow:0 20px 40px rgba(0,0,0,.6),0 0 40px rgba(255,45,85,.07)}
+.pulse-wrap{position:relative;width:72px;height:72px;margin:0 auto 36px}
+.ring{position:absolute;inset:0;border-radius:50%;border:1px solid var(--brand);opacity:0}
+.active .ring:nth-child(1){animation:expand 2s ease-out infinite}
+.active .ring:nth-child(2){animation:expand 2s ease-out .67s infinite}
+.active .ring:nth-child(3){animation:expand 2s ease-out 1.33s infinite}
+@keyframes expand{0%{opacity:.55;transform:scale(1)}100%{opacity:0;transform:scale(3.2)}}
+.dot{position:absolute;top:50%;left:50%;width:20px;height:20px;transform:translate(-50%,-50%);background:var(--brand);border-radius:50%;transition:box-shadow .3s}
+.active .dot{box-shadow:0 0 20px rgba(255,45,85,.6)}
+.track-name{font-size:.92rem;font-weight:600;letter-spacing:.5px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track-meta{font-size:.7rem;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;margin-bottom:28px}
+.progress{margin-bottom:32px}
+.bar{height:2px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:8px}
+.fill{height:100%;background:var(--brand);width:0%;transition:width .5s linear}
+.times{display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px}
+.controls{display:flex;align-items:center;justify-content:center;gap:24px}
+.btn-skip{background:none;border:none;color:var(--muted);cursor:pointer;padding:8px;border-radius:8px;line-height:0;transition:color .2s}
+.btn-skip:hover{color:var(--text)}
+.btn-play{width:50px;height:50px;border-radius:50%;background:var(--brand);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .2s}
+.btn-play:hover{transform:scale(1.07);box-shadow:0 0 20px rgba(255,45,85,.4)}
+.btn-play.on{box-shadow:0 0 24px rgba(255,45,85,.5)}
+.status-bar{width:100%;max-width:440px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:.72rem;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;padding:0 4px}
+.live-tag{display:flex;align-items:center;gap:6px;background:rgba(0,255,102,.06);border:1px solid rgba(0,255,102,.15);padding:4px 10px;border-radius:4px;color:#00ff66}
+.live-dot{width:6px;height:6px;background:#00ff66;border-radius:50%;animation:blink 2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.host-tag{background:rgba(255,255,255,.03);border:1px solid var(--border);padding:4px 10px;border-radius:4px}
+.no-signal{padding:60px 20px;color:var(--muted);font-family:ui-monospace,monospace;letter-spacing:1px;font-size:.8rem}
+</style>
+</head>
+<body>
+<div class="header"><h1>Rouge Radio</h1><p class="subtitle">Live Stream</p></div>
+<div class="card">
+  <div class="pulse-wrap" id="pulser"><div class="ring"></div><div class="ring"></div><div class="ring"></div><div class="dot"></div></div>
+  <div id="player">
+    <div class="track-name" id="trackName">Loading...</div>
+    <div class="track-meta" id="trackMeta">&nbsp;</div>
+    <div class="progress"><div class="bar"><div class="fill" id="fill"></div></div><div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div></div>
+    <div class="controls">
+      <button class="btn-skip" onclick="prev()"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+      <button class="btn-play" id="playBtn" onclick="togglePlay()"><svg id="playIcon" width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg></button>
+      <button class="btn-skip" onclick="next()"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg></button>
+    </div>
+  </div>
+  <div id="nosig" class="no-signal" style="display:none">[-] NO BROADCAST SIGNAL DETECTED IN /MEDIA/</div>
+</div>
+<div class="status-bar"><div class="live-tag"><div class="live-dot"></div>Uplink Stable</div><div class="host-tag">Host: Wyse-5070</div></div>
+<audio id="audio" preload="auto"></audio>
+<script>
+const audio=document.getElementById("audio");
+const pulser=document.getElementById("pulser");
+const playBtn=document.getElementById("playBtn");
+const playIcon=document.getElementById("playIcon");
+const trackName=document.getElementById("trackName");
+const trackMeta=document.getElementById("trackMeta");
+const fill=document.getElementById("fill");
+const cur=document.getElementById("cur");
+const dur=document.getElementById("dur");
+const expectedAudioMime="audio/mpeg";
+let tracks=[],idx=0;
+function fmt(s){return Math.floor(s/60)+":"+String(Math.floor(s)%60).padStart(2,"0")}
+function cleanName(p){return p.split("/").pop().replace(/\.[^.]+$/,"").replace(/[-_]/g," ")}
+let blobUrl=null;function loadTrack(i){idx=i;const src=tracks[i];console.info("[webradio] loading track",{index:idx,src,expectedMime:expectedAudioMime,mp3Support:audio.canPlayType(expectedAudioMime)});trackName.textContent=cleanName(src);trackMeta.textContent="Track "+(i+1)+" of "+tracks.length+" \u00b7 MP3";fill.style.width="0%";cur.textContent="0:00";dur.textContent="0:00";fetch(src).then(r=>{console.info("[webradio] track response",src,r.status,r.statusText);if(!r.ok)throw new Error("track request failed: "+r.status);return r.blob()}).then(blob=>{if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(blob);audio.src=blobUrl;audio.load();if(!audio.paused||idx!==0)audio.play().catch(error=>console.warn("[webradio] autoplay/playback blocked or failed",error))}).catch(e=>console.error("[webradio] track load failed",src,e))}
+function setUI(playing){if(playing){pulser.classList.add("active");playBtn.classList.add("on");playIcon.innerHTML='<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';}else{pulser.classList.remove("active");playBtn.classList.remove("on");playIcon.innerHTML='<path d="M8 5v14l11-7z"/>';}}
+function togglePlay(){if(audio.paused){audio.play().then(()=>setUI(true)).catch(error=>console.warn("[webradio] play failed",error))}else{audio.pause();setUI(false)}}
+function next(){const n=(idx+1)%tracks.length;loadTrack(n);if(!audio.paused)audio.play().catch(error=>console.warn("[webradio] next playback failed",error))}
+function prev(){const n=(idx-1+tracks.length)%tracks.length;loadTrack(n);if(!audio.paused)audio.play().catch(error=>console.warn("[webradio] previous playback failed",error))}
+audio.ontimeupdate=()=>{if(!audio.duration)return;fill.style.width=(audio.currentTime/audio.duration*100)+"%";cur.textContent=fmt(audio.currentTime);dur.textContent=fmt(audio.duration)}
+audio.onended=()=>{next()}
+audio.onerror=()=>console.error("[webradio] audio playback error",{src:audio.currentSrc||audio.src,error:audio.error,networkState:audio.networkState,readyState:audio.readyState})
+console.info("[webradio] loading playlist","playlist.json")
+fetch("playlist.json").then(r=>{console.info("[webradio] playlist response",r.status,r.statusText);if(!r.ok)throw new Error("playlist request failed: "+r.status);return r.json()}).then(files=>{console.info("[webradio] playlist parsed",files);if(!Array.isArray(files)||!files.length){document.getElementById("player").style.display="none";document.getElementById("nosig").style.display="block";return}tracks=files;loadTrack(0);trackName.textContent=cleanName(files[0])}).catch(error=>{console.error("[webradio] playlist load failed",error);trackName.textContent="Error loading playlist"})
+</script>
+</body>
+</html>

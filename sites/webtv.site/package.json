@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "node ../tools/static-server.mjs 5173",
+    "verify": "node ../tools/verify-playlist.mjs . video"
+  }
+}
