@@ -195,7 +195,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                               url,
                             );
                           } else {
-                            await _resolveMesh(url);
+                            await _openMeshUrl(url);
                           }
                           return NavigationActionPolicy.CANCEL;
                         }
@@ -269,13 +269,160 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     }
 
     if (url.startsWith(AppConstants.meshSchemePrefix)) {
-      await _resolveMesh(url);
+      await _openMeshUrl(url);
       return;
     }
 
     _clearCurrentMeshHost();
     setState(() => _showHome = false);
     await _webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+  }
+
+  Future<void> _openMeshUrl(String meshUrl) async {
+    final canOpen = await _ensureMeshIdentity(meshUrl);
+    if (!canOpen || !mounted) {
+      ref.read(browserProvider.notifier).setLoading(false);
+      return;
+    }
+
+    await _resolveMesh(meshUrl);
+  }
+
+  Future<bool> _ensureMeshIdentity(String pendingMeshUrl) async {
+    final identityNotifier = ref.read(meshIdentityProvider.notifier);
+    await identityNotifier.ensureLoaded();
+    if (!mounted) {
+      return false;
+    }
+
+    if (await identityNotifier.ensureRegistered()) {
+      return true;
+    }
+    if (!mounted) {
+      return false;
+    }
+
+    final action = await showModalBottomSheet<_MeshJoinAction>(
+      context: context,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Join the Mesh',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: SaturnTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                pendingMeshUrl,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: SaturnTheme.mono.copyWith(
+                  color: SaturnTheme.meshAccent,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _MeshJoinAction.create),
+                  child: const Text('Create Identity'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _MeshJoinAction.login),
+                  child: const Text('Log In With Existing Handle'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (action == _MeshJoinAction.create) {
+      final created = await identityNotifier.createIdentity();
+      if (!created && mounted) {
+        _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
+      }
+      if (created && mounted) {
+        _showMeshHome();
+      }
+      return false;
+    }
+
+    if (action == _MeshJoinAction.login) {
+      await identityNotifier.logInWithExistingHandle('');
+      if (mounted) {
+        _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  void _showMeshHome() {
+    _clearCurrentMeshHost();
+    final notifier = ref.read(browserProvider.notifier);
+    notifier.setUrl(AppConstants.homeUrl);
+    notifier.setLoading(false);
+    notifier.setNavState(canGoBack: false, canGoForward: false);
+    setState(() => _showHome = true);
+  }
+
+  void _showMeshIdentityError(String? message) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Mesh unavailable',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: SaturnTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                message ?? 'Mesh identity registration failed.',
+                style: const TextStyle(color: SaturnTheme.textSecondary),
+              ),
+              const SizedBox(height: 18),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _resolveMesh(String meshUrl) async {
@@ -553,6 +700,11 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     return handle.isEmpty ? null : handle;
   }
 
+  void _clearCurrentMeshHost() {
+    _currentHostPeerId = null;
+    _currentMeshHandle = null;
+  }
+
   void _registerMeshMediaHost(String? handle, String peerId) {
     if (handle == null || handle.isEmpty) {
       return;
@@ -752,12 +904,9 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   void _logMeshResource(String message) {
     debugPrint('[mesh-media] $message');
   }
-
-  void _clearCurrentMeshHost() {
-    _currentHostPeerId = null;
-    _currentMeshHandle = null;
-  }
 }
+
+enum _MeshJoinAction { create, login }
 
 class _PlaylistRewriteResult {
   const _PlaylistRewriteResult(this.value, {required this.changed});
