@@ -77,7 +77,27 @@ class _AddressBarState extends ConsumerState<AddressBar> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               )
+            : _controller.text.isNotEmpty
+            ? IconButton(
+                tooltip: 'Clear address',
+                splashRadius: 16,
+                icon: const Icon(
+                  Icons.close,
+                  color: SaturnTheme.textSecondary,
+                  size: 16,
+                ),
+                onPressed: () {
+                  _controller.clear();
+                  ref.read(browserProvider.notifier).setAddressBar('');
+                  setState(() {});
+                },
+              )
             : null,
+        hintText: 'Search or enter address',
+        hintStyle: SaturnTheme.mono.copyWith(
+          color: SaturnTheme.textMuted,
+          fontSize: 13,
+        ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(999),
           borderSide: BorderSide(
@@ -106,6 +126,10 @@ class _AddressBarState extends ConsumerState<AddressBar> {
 
   String _resolveInput(String input) {
     final value = input.trim();
+    if (value.isEmpty) {
+      return AppConstants.homeUrl;
+    }
+
     if (value.startsWith(AppConstants.meshSchemePrefix) ||
         value.startsWith('http://') ||
         value.startsWith('https://')) {
@@ -113,6 +137,10 @@ class _AddressBarState extends ConsumerState<AddressBar> {
     }
 
     if (value.startsWith('@')) {
+      return '${AppConstants.meshSchemePrefix}$value';
+    }
+
+    if (value.endsWith('.site') && !value.contains(RegExp(r'\s'))) {
       return '${AppConstants.meshSchemePrefix}$value';
     }
 

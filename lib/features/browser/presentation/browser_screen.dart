@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -14,7 +14,6 @@ import '../../mesh/services/mesh_client.dart';
 import '../../mesh/services/mesh_media_bridge.dart';
 import '../providers/browser_provider.dart';
 import 'address_bar.dart';
-import 'browser_controls.dart';
 import 'saturn_home.dart';
 
 class BrowserScreen extends ConsumerStatefulWidget {
@@ -26,10 +25,24 @@ class BrowserScreen extends ConsumerStatefulWidget {
 
 class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   InAppWebViewController? _webViewController;
-  bool _showHome = true;
-  String? _currentHostPeerId;
-  String? _currentMeshHandle;
+  final Map<String, _TabRuntime> _tabRuntimes = {'tab-1': _TabRuntime()};
+  final Set<String> _bookmarkedUrls = {};
   MeshMediaBridge? _mediaBridge;
+
+  _TabRuntime get _activeRuntime {
+    final activeTabId = ref.read(browserProvider).activeTabId;
+    return _runtimeFor(activeTabId);
+  }
+
+  String? get _currentHostPeerId => _activeRuntime.hostPeerId;
+  set _currentHostPeerId(String? value) => _activeRuntime.hostPeerId = value;
+
+  String? get _currentMeshHandle => _activeRuntime.meshHandle;
+  set _currentMeshHandle(String? value) => _activeRuntime.meshHandle = value;
+
+  _TabRuntime _runtimeFor(String tabId) {
+    return _tabRuntimes.putIfAbsent(tabId, _TabRuntime.new);
+  }
 
   @override
   void dispose() {
@@ -55,24 +68,36 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+                    padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                     child: Row(
                       children: [
-                        BrowserControls(
-                          onBack: _goBack,
-                          onForward: _goForward,
-                          onReloadOrStop: _reloadOrStop,
-                          onHome: () => _navigate(AppConstants.homeUrl),
-                        ),
-                        Expanded(child: AddressBar(onSubmitted: _navigate)),
                         IconButton(
+                          tooltip: 'Bookmark',
                           visualDensity: VisualDensity.compact,
                           splashRadius: 18,
-                          onPressed: () {},
-                          icon: const Icon(
-                            Icons.more_vert,
-                            color: SaturnTheme.textSecondary,
+                          onPressed: _toggleBookmark,
+                          icon: Icon(
+                            _isActiveUrlBookmarked
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                            color: _isActiveUrlBookmarked
+                                ? SaturnTheme.meshAccent
+                                : SaturnTheme.textSecondary,
                           ),
+                        ),
+                        Expanded(
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 720),
+                              child: AddressBar(onSubmitted: _navigate),
+                            ),
+                          ),
+                        ),
+                        _BrowserMenuButton(
+                          canGoBack: state.canGoBack,
+                          canGoForward: state.canGoForward,
+                          isLoading: state.isLoading,
+                          onSelected: _handleMenuAction,
                         ),
                       ],
                     ),
@@ -97,7 +122,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                 children: [
                   SaturnHome(onNavigate: _navigate),
                   Offstage(
-                    offstage: _showHome,
+                    offstage: _activeRuntime.showHome,
                     child: InAppWebView(
                       initialSettings: InAppWebViewSettings(
                         javaScriptEnabled: true,
@@ -213,17 +238,17 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                         return NavigationActionPolicy.ALLOW;
                       },
                       onLoadStart: (controller, url) {
-                        ref
-                            .read(browserProvider.notifier)
-                            .setLoading(true, progress: 0);
+                        final notifier = ref.read(browserProvider.notifier);
+                        notifier.setLoading(true, progress: 0);
                         if (url != null &&
                             !ref
                                 .read(browserProvider)
                                 .addressBarText
                                 .startsWith(AppConstants.meshSchemePrefix)) {
-                          ref
-                              .read(browserProvider.notifier)
-                              .setAddressBar(url.toString());
+                          final text = url.toString();
+                          if (!text.startsWith(AppConstants.meshSchemePrefix)) {
+                            notifier.setUrl(text);
+                          }
                         }
                       },
                       onProgressChanged: (controller, progress) {
@@ -236,6 +261,12 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                       },
                       onLoadStop: (controller, url) async {
                         final notifier = ref.read(browserProvider.notifier);
+                        if (url != null) {
+                          final text = url.toString();
+                          if (!text.startsWith(AppConstants.meshSchemePrefix)) {
+                            notifier.setUrl(text);
+                          }
+                        }
                         notifier.setLoading(false);
                         notifier.setNavState(
                           canGoBack: await controller.canGoBack(),
@@ -253,28 +284,263 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
           ],
         ),
       ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          height: 56,
+          decoration: const BoxDecoration(
+            color: SaturnTheme.surface,
+            border: Border(top: BorderSide(color: SaturnTheme.border)),
+          ),
+          child: Center(
+            child: IconButton(
+              tooltip: 'Tabs',
+              splashRadius: 22,
+              onPressed: _showTabSwitcher,
+              icon: Badge.count(
+                count: state.tabs.length,
+                backgroundColor: SaturnTheme.meshAccent,
+                textColor: SaturnTheme.voidBg,
+                child: const Icon(
+                  Icons.tab_outlined,
+                  color: SaturnTheme.textPrimary,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _newTab() {
+    final tabId = ref.read(browserProvider.notifier).newTab();
+    _runtimeFor(tabId).showHome = true;
+    unawaited(_webViewController?.stopLoading());
+    setState(() {});
+  }
+
+  void _toggleBookmark() {
+    final url = ref.read(browserProvider).currentUrl;
+    if (url == AppConstants.homeUrl || url.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      if (!_bookmarkedUrls.add(url)) {
+        _bookmarkedUrls.remove(url);
+      }
+    });
+  }
+
+  bool get _isActiveUrlBookmarked {
+    final url = ref.watch(browserProvider).currentUrl;
+    return url != AppConstants.homeUrl && _bookmarkedUrls.contains(url);
+  }
+
+  void _handleMenuAction(_BrowserMenuAction action) {
+    switch (action) {
+      case _BrowserMenuAction.back:
+        unawaited(_goBack());
+      case _BrowserMenuAction.forward:
+        unawaited(_goForward());
+      case _BrowserMenuAction.reloadOrHome:
+        unawaited(_reloadOrStop());
+      case _BrowserMenuAction.history:
+      case _BrowserMenuAction.bookmarks:
+      case _BrowserMenuAction.downloads:
+      case _BrowserMenuAction.help:
+      case _BrowserMenuAction.settings:
+        _showPlaceholderSheet(action.label);
+      case _BrowserMenuAction.exit:
+        SystemNavigator.pop();
+    }
+  }
+
+  void _showPlaceholderSheet(String title) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: SaturnTheme.textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Coming soon.',
+                  style: TextStyle(color: SaturnTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showTabSwitcher() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      isScrollControlled: true,
+      builder: (context) {
+        return Consumer(
+          builder: (context, ref, _) {
+            final state = ref.watch(browserProvider);
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Tabs',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: SaturnTheme.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: 'New tab',
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _newTab();
+                          },
+                          icon: const Icon(
+                            Icons.add,
+                            color: SaturnTheme.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * 0.55,
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: state.tabs.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final tab = state.tabs[index];
+                          return _TabListTile(
+                            tab: tab,
+                            active: tab.id == state.activeTabId,
+                            canClose: state.tabs.length > 1,
+                            onTap: () {
+                              Navigator.pop(context);
+                              unawaited(_switchTab(tab.id));
+                            },
+                            onClose: () => unawaited(_closeTab(tab.id)),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _closeTab(String tabId) async {
+    final wasActive = ref.read(browserProvider).activeTabId == tabId;
+    _tabRuntimes.remove(tabId);
+    ref.read(browserProvider.notifier).closeTab(tabId);
+    if (!mounted) {
+      return;
+    }
+
+    if (wasActive) {
+      setState(() {});
+      await _restoreActiveTab();
+      return;
+    }
+
+    setState(() {});
+  }
+
+  Future<void> _switchTab(String tabId) async {
+    if (ref.read(browserProvider).activeTabId == tabId) {
+      return;
+    }
+
+    await _webViewController?.stopLoading();
+    ref.read(browserProvider.notifier).switchTab(tabId);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {});
+    await _restoreActiveTab();
+  }
+
+  Future<void> _restoreActiveTab() async {
+    final state = ref.read(browserProvider);
+    final runtime = _runtimeFor(state.activeTabId);
+    if (runtime.showHome || state.currentUrl == AppConstants.homeUrl) {
+      runtime.showHome = true;
+      ref.read(browserProvider.notifier).setLoading(false);
+      setState(() {});
+      return;
+    }
+
+    if (state.currentUrl.startsWith(AppConstants.meshSchemePrefix)) {
+      await _openMeshUrl(state.currentUrl);
+      return;
+    }
+
+    _clearCurrentMeshHost();
+    runtime.showHome = false;
+    setState(() {});
+    await _webViewController?.loadUrl(
+      urlRequest: URLRequest(url: WebUri(state.currentUrl)),
     );
   }
 
   Future<void> _navigate(String url) async {
     final notifier = ref.read(browserProvider.notifier);
-    notifier.setUrl(url);
 
     if (url == AppConstants.homeUrl) {
+      notifier.setUrl(url);
       _clearCurrentMeshHost();
-      setState(() => _showHome = true);
+      setState(() => _activeRuntime.showHome = true);
       notifier.setLoading(false);
       notifier.setNavState(canGoBack: false, canGoForward: false);
       return;
     }
 
     if (url.startsWith(AppConstants.meshSchemePrefix)) {
+      notifier.setAddressBar(url);
       await _openMeshUrl(url);
       return;
     }
 
+    notifier.setUrl(url);
     _clearCurrentMeshHost();
-    setState(() => _showHome = false);
+    setState(() => _activeRuntime.showHome = false);
     await _webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
   }
 
@@ -295,13 +561,19 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
       return false;
     }
 
-    if (await identityNotifier.ensureRegistered()) {
+    var identity = ref.read(meshIdentityProvider);
+    if (identity.isMeshLoggedIn) {
       return true;
     }
     if (!mounted) {
       return false;
     }
 
+    final canUseStoredIdentity =
+        identity.handle != null &&
+        identity.peerId != null &&
+        identity.publicKey != null &&
+        identity.privateKey != null;
     final action = await showModalBottomSheet<_MeshJoinAction>(
       context: context,
       backgroundColor: SaturnTheme.surface,
@@ -330,6 +602,11 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                   fontSize: 13,
                 ),
               ),
+              const SizedBox(height: 12),
+              const Text(
+                'Mesh identity is required before opening this site.',
+                style: TextStyle(color: SaturnTheme.textSecondary),
+              ),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
@@ -343,9 +620,14 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: () =>
-                      Navigator.pop(context, _MeshJoinAction.login),
-                  child: const Text('Log In With Existing Handle'),
+                  onPressed: canUseStoredIdentity
+                      ? () => Navigator.pop(context, _MeshJoinAction.login)
+                      : null,
+                  child: Text(
+                    canUseStoredIdentity
+                        ? 'Log In With ${identity.handle}'
+                        : 'Log In With Existing Identity',
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -374,9 +656,12 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     }
 
     if (action == _MeshJoinAction.login) {
-      await identityNotifier.logInWithExistingHandle('');
-      if (mounted) {
+      final loggedIn = await identityNotifier.ensureRegistered();
+      if (!loggedIn && mounted) {
         _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
+      }
+      if (loggedIn && mounted) {
+        _showMeshHome();
       }
       return false;
     }
@@ -390,7 +675,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     notifier.setUrl(AppConstants.homeUrl);
     notifier.setLoading(false);
     notifier.setNavState(canGoBack: false, canGoForward: false);
-    setState(() => _showHome = true);
+    setState(() => _activeRuntime.showHome = true);
   }
 
   void _showMeshIdentityError(String? message) {
@@ -427,9 +712,9 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
 
   Future<void> _resolveMesh(String meshUrl) async {
     final notifier = ref.read(browserProvider.notifier);
-    notifier.setAddressBar(meshUrl);
+    notifier.setUrl(meshUrl);
     notifier.setLoading(true);
-    setState(() => _showHome = false);
+    setState(() => _activeRuntime.showHome = false);
 
     final result = await ref.read(meshResolverProvider).resolve(meshUrl);
     if (!mounted) {
@@ -460,9 +745,9 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     String displayUrl,
   ) async {
     final notifier = ref.read(browserProvider.notifier);
-    notifier.setAddressBar(displayUrl);
+    notifier.setUrl(displayUrl);
     notifier.setLoading(true);
-    setState(() => _showHome = false);
+    setState(() => _activeRuntime.showHome = false);
 
     final result = await ref.read(meshClientProvider).fetch(hostPeerId, path);
     if (!mounted) {
@@ -483,7 +768,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
           baseUrl: WebUri('mesh://$_currentMeshHandle/'),
           historyUrl: WebUri(displayUrl),
         );
-        notifier.setAddressBar(displayUrl);
+        notifier.setUrl(displayUrl);
       } on FormatException catch (error) {
         notifier.setLoading(false);
         _showMeshFetchError(
@@ -519,7 +804,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     if (state.isLoading) {
       await _webViewController?.stopLoading();
       ref.read(browserProvider.notifier).setLoading(false);
-    } else if (_showHome) {
+    } else if (_activeRuntime.showHome) {
       await _navigate(AppConstants.homeUrl);
     } else {
       await _webViewController?.reload();
@@ -904,6 +1189,229 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   void _logMeshResource(String message) {
     debugPrint('[mesh-media] $message');
   }
+}
+
+class _BrowserMenuButton extends StatelessWidget {
+  const _BrowserMenuButton({
+    required this.canGoBack,
+    required this.canGoForward,
+    required this.isLoading,
+    required this.onSelected,
+  });
+
+  final bool canGoBack;
+  final bool canGoForward;
+  final bool isLoading;
+  final ValueChanged<_BrowserMenuAction> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_BrowserMenuAction>(
+      tooltip: 'Menu',
+      color: SaturnTheme.surface,
+      icon: const Icon(Icons.menu, color: SaturnTheme.textSecondary),
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: _BrowserMenuAction.back,
+          enabled: canGoBack,
+          child: const _MenuItem(icon: Icons.arrow_back, label: 'Back'),
+        ),
+        PopupMenuItem(
+          value: _BrowserMenuAction.forward,
+          enabled: canGoForward,
+          child: const _MenuItem(icon: Icons.arrow_forward, label: 'Forward'),
+        ),
+        PopupMenuItem(
+          value: _BrowserMenuAction.reloadOrHome,
+          child: _MenuItem(
+            icon: isLoading ? Icons.close : Icons.refresh,
+            label: isLoading ? 'Stop' : 'Reload / Home',
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.history,
+          child: _MenuItem(icon: Icons.history, label: 'History'),
+        ),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.bookmarks,
+          child: _MenuItem(icon: Icons.bookmarks_outlined, label: 'Bookmarks'),
+        ),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.downloads,
+          child: _MenuItem(icon: Icons.download_outlined, label: 'Downloads'),
+        ),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.help,
+          child: _MenuItem(icon: Icons.help_outline, label: 'Help'),
+        ),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.settings,
+          child: _MenuItem(icon: Icons.settings_outlined, label: 'Settings'),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: _BrowserMenuAction.exit,
+          child: _MenuItem(icon: Icons.exit_to_app, label: 'Exit'),
+        ),
+      ],
+    );
+  }
+}
+
+class _MenuItem extends StatelessWidget {
+  const _MenuItem({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, color: SaturnTheme.textSecondary, size: 20),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(color: SaturnTheme.textPrimary)),
+      ],
+    );
+  }
+}
+
+enum _BrowserMenuAction {
+  back('Back'),
+  forward('Forward'),
+  reloadOrHome('Reload / Home'),
+  history('History'),
+  bookmarks('Bookmarks'),
+  downloads('Downloads'),
+  help('Help'),
+  settings('Settings'),
+  exit('Exit');
+
+  const _BrowserMenuAction(this.label);
+
+  final String label;
+}
+
+class _TabListTile extends StatelessWidget {
+  const _TabListTile({
+    required this.tab,
+    required this.active,
+    required this.canClose,
+    required this.onTap,
+    required this.onClose,
+  });
+
+  final BrowserTab tab;
+  final bool active;
+  final bool canClose;
+  final VoidCallback onTap;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = tab.title.trim().isEmpty ? 'New tab' : tab.title;
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: active ? SaturnTheme.surfaceAlt : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 58),
+            padding: const EdgeInsets.only(left: 12, right: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: active ? SaturnTheme.meshAccent : SaturnTheme.border,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  tab.isMeshPage ? Icons.hub_outlined : Icons.language,
+                  color: tab.isMeshPage
+                      ? SaturnTheme.meshAccent
+                      : SaturnTheme.textSecondary,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: SaturnTheme.mono.copyWith(
+                          color: active
+                              ? SaturnTheme.textPrimary
+                              : SaturnTheme.textSecondary,
+                          fontSize: 13,
+                          fontWeight: active
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        tab.addressBarText.isEmpty
+                            ? 'New tab'
+                            : tab.addressBarText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: SaturnTheme.mono.copyWith(
+                          color: SaturnTheme.textMuted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (tab.isLoading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else if (canClose)
+                  IconButton(
+                    tooltip: 'Close tab',
+                    visualDensity: VisualDensity.compact,
+                    splashRadius: 14,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    onPressed: onClose,
+                    icon: const Icon(
+                      Icons.close,
+                      color: SaturnTheme.textSecondary,
+                      size: 15,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TabRuntime {
+  bool showHome = true;
+  String? hostPeerId;
+  String? meshHandle;
 }
 
 enum _MeshJoinAction { create, login }

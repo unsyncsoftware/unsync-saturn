@@ -26,14 +26,28 @@ class MeshFetchResult {
 }
 
 class MeshClient {
-  MeshClient() : saturnPeerId = 'saturn-${_randomHex(16)}';
+  MeshClient();
 
   static const _requestTimeout = Duration(seconds: 15);
   static const _keepaliveInterval = Duration(seconds: 20);
   static const _reconnectDelay = Duration(seconds: 5);
   static final Random _random = Random.secure();
 
-  final String saturnPeerId;
+  String? _peerId;
+  String? _handle;
+
+  String? get saturnPeerId => _peerId;
+
+  void setIdentity({String? handle, String? peerId}) {
+    if (_peerId == peerId && _handle == handle) {
+      return;
+    }
+
+    _peerId = peerId;
+    _handle = handle;
+    _registered = false;
+    _channel?.sink.close();
+  }
 
   WebSocketChannel? _channel;
   Completer<void>? _connecting;
@@ -52,6 +66,16 @@ class MeshClient {
     String? range,
   }) async {
     final requestPath = path.isEmpty ? '/' : path;
+    final peerId = saturnPeerId;
+    if (peerId == null || peerId.isEmpty) {
+      return const MeshFetchResult(
+        success: false,
+        status: 0,
+        mime: 'text/plain',
+        error: 'Mesh identity is required before joining the relay.',
+      );
+    }
+
     try {
       await _ensureConnected();
     } catch (error) {
@@ -75,7 +99,7 @@ class MeshClient {
     final message = <String, Object?>{
       'type': 'mesh-request',
       'to': hostPeerId,
-      'from': saturnPeerId,
+      'from': peerId,
       'requestId': requestId,
       'path': requestPath.startsWith('/') ? requestPath : '/$requestPath',
     };
@@ -116,6 +140,12 @@ class MeshClient {
   }
 
   Future<void> _ensureConnected() {
+    if (_peerId == null || _peerId!.isEmpty) {
+      return Future.error(
+        StateError('Mesh identity is required before joining the relay.'),
+      );
+    }
+
     if (_registered && _channel != null) {
       return Future.value();
     }
@@ -158,7 +188,7 @@ class MeshClient {
       );
 
       await channel.ready.timeout(AppConstants.connectTimeout);
-      _send({'type': 'register', 'id': saturnPeerId});
+      _send({'type': 'register', 'id': _peerId, 'handle': _handle});
     } catch (error) {
       if (!completer.isCompleted) {
         completer.completeError(error);

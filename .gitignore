@@ -48,3 +48,11 @@ app.*.map.json
 android/key.properties
 android/app/saturn-release.jks
 android/app/saturn-release.p12
+
+# Keystore base64 exports
+*.p12.base64
+*.jks.base64
+.tmp/
+
+saturn-release.jks
+saturn-release.p12
