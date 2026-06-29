@@ -136,14 +136,16 @@ class MeshIdentityService extends StateNotifier<MeshIdentityState> {
     );
   }
 
-  Future<bool> createIdentity() async {
+  Future<bool> createIdentity({String? handle}) async {
     await ensureLoaded();
 
     final keyPair = await _ed25519.newKeyPair();
     final publicKey = await keyPair.extractPublicKey();
     final privateKeyBytes = await keyPair.extractPrivateKeyBytes();
+    final identityHandle =
+        _normalizeHandle(handle) ?? '@saturn-${_randomHex(4)}';
     final identity = MeshIdentityState(
-      handle: '@saturn-${_randomHex(4)}',
+      handle: identityHandle,
       peerId: 'saturn-${_randomHex(16)}',
       publicKey: _encodeEd25519Spki(publicKey.bytes),
       privateKey: base64Encode(privateKeyBytes),
@@ -330,6 +332,22 @@ class MeshIdentityService extends StateNotifier<MeshIdentityState> {
       return null;
     }
     return DateTime.tryParse(value);
+  }
+
+  static String? _normalizeHandle(String? handle) {
+    final trimmed = handle?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+
+    final withoutPrefix = trimmed.startsWith('@')
+        ? trimmed.substring(1).trim()
+        : trimmed;
+    if (withoutPrefix.isEmpty) {
+      return null;
+    }
+
+    return '@$withoutPrefix';
   }
 
   static String _normalizePublicKey(String? publicKey) {

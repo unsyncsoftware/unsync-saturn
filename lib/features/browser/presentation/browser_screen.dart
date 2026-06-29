@@ -645,14 +645,18 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     );
 
     if (action == _MeshJoinAction.create) {
-      final created = await identityNotifier.createIdentity();
+      final choice = await _showCreateIdentityHandlePrompt();
+      if (choice == null || !mounted) {
+        return false;
+      }
+
+      final created = await identityNotifier.createIdentity(
+        handle: choice.handle,
+      );
       if (!created && mounted) {
         _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
       }
-      if (created && mounted) {
-        _showMeshHome();
-      }
-      return false;
+      return created && mounted;
     }
 
     if (action == _MeshJoinAction.login) {
@@ -667,6 +671,128 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     }
 
     return false;
+  }
+
+  Future<_MeshCreateIdentityChoice?> _showCreateIdentityHandlePrompt() async {
+    final controller = TextEditingController();
+    String? errorText;
+
+    final choice = await showModalBottomSheet<_MeshCreateIdentityChoice>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: SaturnTheme.surface,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            void submit() {
+              final handle = controller.text.trim();
+              if (handle.isEmpty) {
+                setSheetState(() {
+                  errorText = 'Enter a handle or use a random one.';
+                });
+                return;
+              }
+
+              Navigator.pop(context, _MeshCreateIdentityChoice(handle: handle));
+            }
+
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  20,
+                  20,
+                  20 + MediaQuery.of(context).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Create Identity',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: SaturnTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Choose a mesh handle.',
+                      style: TextStyle(color: SaturnTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.done,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp('[A-Za-z0-9_-]'),
+                        ),
+                      ],
+                      style: SaturnTheme.mono.copyWith(
+                        color: SaturnTheme.textPrimary,
+                        fontSize: 14,
+                      ),
+                      cursorColor: SaturnTheme.meshAccent,
+                      decoration: InputDecoration(
+                        prefixText: '@',
+                        hintText: 'your-handle',
+                        errorText: errorText,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(
+                            color: SaturnTheme.border,
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(
+                            color: SaturnTheme.meshAccent,
+                            width: 1.4,
+                          ),
+                        ),
+                      ),
+                      onChanged: (_) {
+                        if (errorText != null) {
+                          setSheetState(() => errorText = null);
+                        }
+                      },
+                      onSubmitted: (_) => submit(),
+                    ),
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: submit,
+                        child: const Text('Continue'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(
+                          context,
+                          const _MeshCreateIdentityChoice(),
+                        ),
+                        child: const Text('Use random handle'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+    return choice;
   }
 
   void _showMeshHome() {
@@ -1415,6 +1541,12 @@ class _TabRuntime {
 }
 
 enum _MeshJoinAction { create, login }
+
+class _MeshCreateIdentityChoice {
+  const _MeshCreateIdentityChoice({this.handle});
+
+  final String? handle;
+}
 
 class _PlaylistRewriteResult {
   const _PlaylistRewriteResult(this.value, {required this.changed});
