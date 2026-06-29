@@ -9,6 +9,7 @@ class SaturnTheme {
   static const surfaceAlt = Color(0xFF161616);
   static const border = Color(0xFF1E1E1E);
   static const meshAccent = Color(0xFF00FFCC);
+  static const accent = meshAccent;
   static const cyan = Color(0xFF64C8FF);
   static const textPrimary = Color(0xFFF0F0F0);
   static const textSecondary = Color(0xFF888888);

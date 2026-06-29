@@ -93,12 +93,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
                             ),
                           ),
                         ),
-                        _BrowserMenuButton(
-                          canGoBack: state.canGoBack,
-                          canGoForward: state.canGoForward,
-                          isLoading: state.isLoading,
-                          onSelected: _handleMenuAction,
-                        ),
+                        _BrowserMenuButton(onSelected: _handleMenuAction),
                       ],
                     ),
                   ),
@@ -340,21 +335,33 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
 
   void _handleMenuAction(_BrowserMenuAction action) {
     switch (action) {
-      case _BrowserMenuAction.back:
-        unawaited(_goBack());
-      case _BrowserMenuAction.forward:
-        unawaited(_goForward());
-      case _BrowserMenuAction.reloadOrHome:
-        unawaited(_reloadOrStop());
-      case _BrowserMenuAction.history:
+      case _BrowserMenuAction.newTab:
+        _newTab();
       case _BrowserMenuAction.bookmarks:
-      case _BrowserMenuAction.downloads:
-      case _BrowserMenuAction.help:
-      case _BrowserMenuAction.settings:
         _showPlaceholderSheet(action.label);
-      case _BrowserMenuAction.exit:
-        SystemNavigator.pop();
+      case _BrowserMenuAction.history:
+        _showPlaceholderSheet(action.label);
+      case _BrowserMenuAction.downloads:
+        _showPlaceholderSheet(action.label);
+      case _BrowserMenuAction.meshIdentity:
+        _showMeshIdentitySheet();
+      case _BrowserMenuAction.discoverMeshSites:
+        _showComingSoon(action.label);
+      case _BrowserMenuAction.settings:
+        _showComingSoon(action.label);
+      case _BrowserMenuAction.aboutSaturn:
+        _showAboutSaturnSheet();
     }
+  }
+
+  void _showComingSoon(String label) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label coming soon'),
+        backgroundColor: SaturnTheme.surfaceAlt,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _showPlaceholderSheet(String title) {
@@ -388,6 +395,98 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
         );
       },
     );
+  }
+
+  void _showMeshIdentitySheet() {
+    final identity = ref.read(meshIdentityProvider);
+    final handle = identity.isMeshLoggedIn && identity.handle != null
+        ? identity.handle!
+        : 'GUEST';
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.voidBg,
+      barrierColor: Colors.black54,
+      shape: const BeveledRectangleBorder(),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Mesh identity',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: SaturnTheme.textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _MeshIdentityMenuBadge(label: handle),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showAboutSaturnSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: SaturnTheme.voidBg,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'About Saturn',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: SaturnTheme.textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                FutureBuilder<String>(
+                  future: _loadSaturnAppVersion(),
+                  builder: (context, snapshot) {
+                    final version = snapshot.data ?? 'loading...';
+                    return Text(
+                      'Version $version',
+                      style: SaturnTheme.mono.copyWith(
+                        color: SaturnTheme.meshAccent,
+                        fontSize: 13,
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String> _loadSaturnAppVersion() async {
+    try {
+      final pubspec = await rootBundle.loadString('pubspec.yaml');
+      for (final line in const LineSplitter().convert(pubspec)) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('version:')) {
+          return trimmed.substring('version:'.length).trim();
+        }
+      }
+    } catch (_) {}
+    return 'unknown';
   }
 
   void _showTabSwitcher() {
@@ -576,98 +675,137 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
         identity.privateKey != null;
     final action = await showModalBottomSheet<_MeshJoinAction>(
       context: context,
-      backgroundColor: SaturnTheme.surface,
+      backgroundColor: SaturnTheme.voidBg,
       barrierColor: Colors.black54,
+      shape: const BeveledRectangleBorder(),
       builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Join the Mesh',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: SaturnTheme.textPrimary,
-                  fontWeight: FontWeight.w700,
+        var primaryLoading = false;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final primaryLabel = canUseStoredIdentity
+                ? 'Log In as ${identity.handle}'
+                : 'Create Identity';
+
+            Future<void> runPrimaryAction() async {
+              if (primaryLoading) {
+                return;
+              }
+
+              if (canUseStoredIdentity) {
+                setSheetState(() => primaryLoading = true);
+                final loggedIn = await identityNotifier.ensureRegistered();
+                if (!context.mounted) {
+                  return;
+                }
+                Navigator.pop(
+                  context,
+                  loggedIn ? _MeshJoinAction.login : _MeshJoinAction.failed,
+                );
+                return;
+              }
+
+              final choice = await _showCreateIdentityHandlePrompt();
+              if (choice == null || !context.mounted) {
+                return;
+              }
+
+              setSheetState(() => primaryLoading = true);
+              final created = await identityNotifier.createIdentity(
+                handle: choice.handle,
+              );
+              if (!context.mounted) {
+                return;
+              }
+              Navigator.pop(
+                context,
+                created ? _MeshJoinAction.create : _MeshJoinAction.failed,
+              );
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Join the Mesh',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: SaturnTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      pendingMeshUrl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: SaturnTheme.mono.copyWith(
+                        color: SaturnTheme.accent,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Mesh identity is required before opening this site.',
+                      style: TextStyle(color: SaturnTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 18),
+                    _MeshJoinPrimaryButton(
+                      label: primaryLabel,
+                      loading: primaryLoading,
+                      onTap: runPrimaryAction,
+                    ),
+                    const SizedBox(height: 10),
+                    _MeshJoinSecondaryButton(
+                      label: 'Login as Guest',
+                      onTap: primaryLoading
+                          ? null
+                          : () => Navigator.pop(context, _MeshJoinAction.guest),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          shape: const BeveledRectangleBorder(),
+                        ),
+                        onPressed: primaryLoading
+                            ? null
+                            : () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 14),
-              Text(
-                pendingMeshUrl,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: SaturnTheme.mono.copyWith(
-                  color: SaturnTheme.meshAccent,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Mesh identity is required before opening this site.',
-                style: TextStyle(color: SaturnTheme.textSecondary),
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () =>
-                      Navigator.pop(context, _MeshJoinAction.create),
-                  child: const Text('Create Identity'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: canUseStoredIdentity
-                      ? () => Navigator.pop(context, _MeshJoinAction.login)
-                      : null,
-                  child: Text(
-                    canUseStoredIdentity
-                        ? 'Log In With ${identity.handle}'
-                        : 'Log In With Existing Identity',
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
 
     if (action == _MeshJoinAction.create) {
-      final choice = await _showCreateIdentityHandlePrompt();
-      if (choice == null || !mounted) {
-        return false;
-      }
-
-      final created = await identityNotifier.createIdentity(
-        handle: choice.handle,
-      );
-      if (!created && mounted) {
-        _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
-      }
-      return created && mounted;
+      return mounted;
     }
 
     if (action == _MeshJoinAction.login) {
-      final loggedIn = await identityNotifier.ensureRegistered();
-      if (!loggedIn && mounted) {
-        _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
-      }
-      if (loggedIn && mounted) {
+      if (mounted) {
         _showMeshHome();
       }
       return false;
+    }
+
+    if (action == _MeshJoinAction.failed) {
+      if (mounted) {
+        _showMeshIdentityError(ref.read(meshIdentityProvider).errorMessage);
+      }
+      return false;
+    }
+
+    if (action == _MeshJoinAction.guest) {
+      return true;
     }
 
     return false;
@@ -913,18 +1051,21 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
     _showMeshFetchError(result);
   }
 
+  // ignore: unused_element
   Future<void> _goBack() async {
     if (await _webViewController?.canGoBack() ?? false) {
       await _webViewController?.goBack();
     }
   }
 
+  // ignore: unused_element
   Future<void> _goForward() async {
     if (await _webViewController?.canGoForward() ?? false) {
       await _webViewController?.goForward();
     }
   }
 
+  // ignore: unused_element
   Future<void> _reloadOrStop() async {
     final state = ref.read(browserProvider);
     if (state.isLoading) {
@@ -1317,103 +1458,211 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen> {
   }
 }
 
-class _BrowserMenuButton extends StatelessWidget {
-  const _BrowserMenuButton({
-    required this.canGoBack,
-    required this.canGoForward,
-    required this.isLoading,
-    required this.onSelected,
-  });
+class _BrowserMenuButton extends ConsumerWidget {
+  const _BrowserMenuButton({required this.onSelected});
 
-  final bool canGoBack;
-  final bool canGoForward;
-  final bool isLoading;
   final ValueChanged<_BrowserMenuAction> onSelected;
 
   @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<_BrowserMenuAction>(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final identity = ref.watch(meshIdentityProvider);
+    final identityLabel = identity.isMeshLoggedIn && identity.handle != null
+        ? identity.handle!
+        : 'GUEST';
+
+    return IconButton(
       tooltip: 'Menu',
-      color: SaturnTheme.surface,
+      visualDensity: VisualDensity.compact,
+      splashRadius: 18,
       icon: const Icon(Icons.menu, color: SaturnTheme.textSecondary),
-      onSelected: onSelected,
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: _BrowserMenuAction.back,
-          enabled: canGoBack,
-          child: const _MenuItem(icon: Icons.arrow_back, label: 'Back'),
-        ),
-        PopupMenuItem(
-          value: _BrowserMenuAction.forward,
-          enabled: canGoForward,
-          child: const _MenuItem(icon: Icons.arrow_forward, label: 'Forward'),
-        ),
-        PopupMenuItem(
-          value: _BrowserMenuAction.reloadOrHome,
-          child: _MenuItem(
-            icon: isLoading ? Icons.close : Icons.refresh,
-            label: isLoading ? 'Stop' : 'Reload / Home',
+      onPressed: () {
+        showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: SaturnTheme.voidBg,
+          barrierColor: Colors.black54,
+          builder: (context) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _MenuSection(
+                      label: 'BROWSER',
+                      children: [
+                        _MenuItem(
+                          icon: Icons.add,
+                          label: 'New tab',
+                          onTap: () => onSelected(_BrowserMenuAction.newTab),
+                        ),
+                        _MenuItem(
+                          icon: Icons.bookmarks_outlined,
+                          label: 'Bookmarks',
+                          onTap: () => onSelected(_BrowserMenuAction.bookmarks),
+                        ),
+                        _MenuItem(
+                          icon: Icons.history,
+                          label: 'History',
+                          onTap: () => onSelected(_BrowserMenuAction.history),
+                        ),
+                        _MenuItem(
+                          icon: Icons.download_outlined,
+                          label: 'Downloads',
+                          onTap: () => onSelected(_BrowserMenuAction.downloads),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    _MenuSection(
+                      label: 'MESH',
+                      children: [
+                        _MenuItem(
+                          icon: Icons.hub_outlined,
+                          label: 'Mesh identity',
+                          trailing: _MeshIdentityMenuBadge(
+                            label: identityLabel,
+                          ),
+                          onTap: () =>
+                              onSelected(_BrowserMenuAction.meshIdentity),
+                        ),
+                        _MenuItem(
+                          icon: Icons.travel_explore,
+                          label: 'Discover mesh sites',
+                          onTap: () =>
+                              onSelected(_BrowserMenuAction.discoverMeshSites),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    _MenuSection(
+                      label: 'APP',
+                      children: [
+                        _MenuItem(
+                          icon: Icons.settings_outlined,
+                          label: 'Settings',
+                          onTap: () => onSelected(_BrowserMenuAction.settings),
+                        ),
+                        _MenuItem(
+                          icon: Icons.info_outline,
+                          label: 'About Saturn',
+                          onTap: () =>
+                              onSelected(_BrowserMenuAction.aboutSaturn),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _MenuSection extends StatelessWidget {
+  const _MenuSection({required this.label, required this.children});
+
+  final String label;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: SaturnTheme.mono.copyWith(
+            color: SaturnTheme.meshAccent,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
           ),
         ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.history,
-          child: _MenuItem(icon: Icons.history, label: 'History'),
-        ),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.bookmarks,
-          child: _MenuItem(icon: Icons.bookmarks_outlined, label: 'Bookmarks'),
-        ),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.downloads,
-          child: _MenuItem(icon: Icons.download_outlined, label: 'Downloads'),
-        ),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.help,
-          child: _MenuItem(icon: Icons.help_outline, label: 'Help'),
-        ),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.settings,
-          child: _MenuItem(icon: Icons.settings_outlined, label: 'Settings'),
-        ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: _BrowserMenuAction.exit,
-          child: _MenuItem(icon: Icons.exit_to_app, label: 'Exit'),
-        ),
+        const SizedBox(height: 8),
+        ...children,
       ],
     );
   }
 }
 
 class _MenuItem extends StatelessWidget {
-  const _MenuItem({required this.icon, required this.label});
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.trailing,
+  });
 
   final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        Navigator.pop(context);
+        onTap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, color: SaturnTheme.textSecondary, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(color: SaturnTheme.textPrimary),
+              ),
+            ),
+            if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MeshIdentityMenuBadge extends StatelessWidget {
+  const _MeshIdentityMenuBadge({required this.label});
+
   final String label;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, color: SaturnTheme.textSecondary, size: 20),
-        const SizedBox(width: 12),
-        Text(label, style: const TextStyle(color: SaturnTheme.textPrimary)),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        border: Border.all(color: SaturnTheme.meshAccent),
+        color: SaturnTheme.surfaceAlt,
+      ),
+      child: Text(
+        label,
+        style: SaturnTheme.mono.copyWith(
+          color: SaturnTheme.meshAccent,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }
 
 enum _BrowserMenuAction {
-  back('Back'),
-  forward('Forward'),
-  reloadOrHome('Reload / Home'),
+  newTab('New tab'),
   history('History'),
   bookmarks('Bookmarks'),
   downloads('Downloads'),
-  help('Help'),
+  meshIdentity('Mesh identity'),
+  discoverMeshSites('Discover mesh sites'),
   settings('Settings'),
-  exit('Exit');
+  aboutSaturn('About Saturn');
 
   const _BrowserMenuAction(this.label);
 
@@ -1540,7 +1789,81 @@ class _TabRuntime {
   String? meshHandle;
 }
 
-enum _MeshJoinAction { create, login }
+class _MeshJoinPrimaryButton extends StatelessWidget {
+  const _MeshJoinPrimaryButton({
+    required this.label,
+    required this.loading,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool loading;
+  final Future<void> Function() onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: loading ? null : onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        color: loading ? SaturnTheme.textMuted : SaturnTheme.accent,
+        child: Center(
+          child: loading
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: SaturnTheme.voidBg,
+                    strokeWidth: 2,
+                  ),
+                )
+              : Text(
+                  label,
+                  style: const TextStyle(
+                    color: SaturnTheme.voidBg,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MeshJoinSecondaryButton extends StatelessWidget {
+  const _MeshJoinSecondaryButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          border: Border.all(color: SaturnTheme.border),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: SaturnTheme.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _MeshJoinAction { create, login, guest, failed }
 
 class _MeshCreateIdentityChoice {
   const _MeshCreateIdentityChoice({this.handle});
